@@ -14,106 +14,24 @@ import (
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/natefinch/lumberjack.v2"
 	_ "modernc.org/sqlite"
+	"gosecureskeleton/pkg/ext/db/sqlite"
+	"gosecureskeleton/pkg/handler"
+	"gosecureskeleton/pkg/session"
+	"gosecureskeleton/pkg/util"
 )
 
-const authorizationCookieName = "authorization"
+const (
+	databasePath = "./app.db"
+	schemaFile   = "./schema.sql"
+	seedFile     = "./seed.sql"
 
-type User struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
-	Password string `json:"-"`
-	Balance  int64  `json:"balance"`
-	IsAdmin  bool   `json:"is_admin"`
-}
-
-type RegisterRequest struct {
-	Username string `json:"username"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
-	Password string `json:"password"`
-}
-
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type WithdrawAccountRequest struct {
-	Password string `json:"password"`
-}
-
-type UserResponse struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
-	Balance  int64  `json:"balance"`
-	IsAdmin  bool   `json:"is_admin"`
-}
-
-type LoginResponse struct {
-	AuthMode string       `json:"auth_mode"`
-	Token    string       `json:"token"`
-	User     UserResponse `json:"user"`
-}
-
-type PostView struct {
-	ID          uint   `json:"id"`
-	Title       string `json:"title"`
-	Content     string `json:"content"`
-	OwnerID     uint   `json:"owner_id"`
-	Author      string `json:"author"`
-	AuthorEmail string `json:"author_email"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-type CreatePostRequest struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
-}
-
-type UpdatePostRequest struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
-}
-
-type PostListResponse struct {
-	Posts []PostView `json:"posts"`
-}
-
-type PostResponse struct {
-	Post PostView `json:"post"`
-}
-
-type DepositRequest struct {
-	Amount int64 `json:"amount"`
-}
-
-type BalanceWithdrawRequest struct {
-	Amount int64 `json:"amount"`
-}
-
-type TransferRequest struct {
-	ToUsername string `json:"to_username"`
-	Amount     int64  `json:"amount"`
-}
-
-type Store struct {
-	db *sql.DB
-}
-
-type SessionStore struct {
-	tokens map[string]User
-}
+	defaultServerPort = ":8080"
+)
 
 func main() {
-	store, err := openStore("./app.db", "./schema.sql", "./seed.sql")
+	util.SetDefaultLogger()
+
+	store, err := sqlite.New(databasePath, schemaFile, seedFile)
 	if err != nil {
 		panic(err)
 	}
@@ -435,17 +353,10 @@ func main() {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "invalid create request"})
 				return
 			}
+	defer store.Close()
 
-			token := tokenFromRequest(c)
-			if token == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{"message": "missing authorization token"})
-				return
-			}
-			user, ok := sessions.lookup(token)
-			if !ok {
-				c.JSON(http.StatusUnauthorized, gin.H{"message": "invalid authorization token"})
-				return
-			}
+	sessions := session.NewStore()
+	router := handler.SetupRouter(store, sessions)
 
 			now := time.Now().Format(time.RFC3339)
 			s.db.Exec(`INSERT INTO posts (title,content,owner_id,created_at,updated_at)VALUES(?,?,?,?,?);`, request.Title, request.Content, user.ID, now, now)
@@ -729,5 +640,9 @@ func JSONLogger() gin.HandlerFunc {
 			"body":   c.Request.Body,
 		}).Info("incoming request")
 		c.Next()
+	}
+}
+	if err = router.Run(defaultServerPort); err != nil {
+		panic(err)
 	}
 }
